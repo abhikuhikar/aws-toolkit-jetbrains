@@ -41,7 +41,7 @@ internal class JavaCodeScanSessionConfig(
     private val buildExt = ".class"
     private val sourceExt = ".java"
 
-    private data class JavaImportsInfo(val imports: List<String>, val packagePath: String)
+    data class JavaImportsInfo(val imports: List<String>, val packagePath: String)
 
     override fun overallJobTimeoutInSeconds(): Long = JAVA_CODE_SCAN_TIMEOUT_IN_SECONDS
 
@@ -58,7 +58,8 @@ internal class JavaCodeScanSessionConfig(
         LOG.debug { "Creating payload. File selected as root for the context truncation: ${selectedFile.path}" }
 
         // Include all the dependencies using BFS
-        val (sourceFiles, buildPaths, payloadSize, totalLines) = includeDependencies()
+        val files = getSourceFilesUnderProjectRoot(selectedFile)
+        val (sourceFiles, buildPaths, payloadSize, totalLines) = includeDependencies(files)
 
         // Copy all the included source files to the source zip
         val srcZip = zipFiles(sourceFiles.map { it.toNioPath() })
@@ -97,7 +98,7 @@ internal class JavaCodeScanSessionConfig(
         return null
     }
 
-    private fun getJavaImportsInfo(file: VirtualFile): JavaImportsInfo {
+    fun parseImports(file: VirtualFile): JavaImportsInfo {
         val imports = mutableSetOf<String>()
         val inputStream = file.inputStream
         var packagePath = ""
@@ -139,7 +140,7 @@ internal class JavaCodeScanSessionConfig(
         } + buildExt
     }
 
-    private fun getSourceFilesUnderProjectRoot(): List<VirtualFile> {
+    override fun getSourceFilesUnderProjectRoot(selectedFile: VirtualFile): List<VirtualFile> {
         val files = mutableListOf<VirtualFile>()
         val sourceRoots = ProjectRootManager.getInstance(project).getModuleSourceRoots(setOf(JavaSourceRootType.SOURCE))
         files.add(selectedFile)
@@ -153,14 +154,13 @@ internal class JavaCodeScanSessionConfig(
         return files
     }
 
-    private data class PayloadMetadata(val sourceFiles: Set<VirtualFile>, val buildPaths: Set<String?>, val payloadSize: Long, val totalLines: Long)
+    data class PayloadMetadata(val sourceFiles: Set<VirtualFile>, val buildPaths: Set<String?>, val payloadSize: Long, val totalLines: Long)
 
-    private fun includeDependencies(): PayloadMetadata {
+    private fun includeDependencies(files: List<VirtualFile>): PayloadMetadata {
         val sourceFiles = mutableSetOf<VirtualFile>()
         val buildPaths = mutableSetOf<String?>()
         var currentTotalFileSize = 0L
         var currentTotalLines = 0L
-        val files = getSourceFilesUnderProjectRoot()
         val queue = ArrayDeque<VirtualFile>()
 
         files.forEach { file ->
@@ -189,7 +189,7 @@ internal class JavaCodeScanSessionConfig(
                 sourceFiles.add(currentFile)
 
                 // Get all imports from the file
-                val importsInfo = getJavaImportsInfo(currentFile)
+                val importsInfo = parseImports(currentFile)
                 importsInfo.imports.forEach { importPath ->
                     val importedFiles = getSourceFilesForImport(currentFile, importPath)
                     importedFiles.forEach { importedFile ->

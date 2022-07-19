@@ -45,7 +45,8 @@ internal class PythonCodeScanSessionConfig(
 
         LOG.debug { "Creating payload. File selected as root for the context truncation: ${selectedFile.path}" }
 
-        val (includedSourceFiles, payloadSize, totalLines) = includeDependencies()
+        val files = getSourceFilesUnderProjectRoot(selectedFile)
+        val (includedSourceFiles, payloadSize, totalLines) = includeDependencies(files)
 
         // Copy all the included source files to the source zip
         val srcZip = zipFiles(includedSourceFiles.map { Path.of(it) })
@@ -62,7 +63,7 @@ internal class PythonCodeScanSessionConfig(
 
     private data class PayloadMetadata(val sourceFiles: Set<String>, val payloadSize: Long, val linesScanned: Long)
 
-    private fun parseImports(file: VirtualFile): List<String> {
+    fun parseImports(file: VirtualFile): List<String> {
         val imports = mutableSetOf<String>()
         val inputStream = file.inputStream
         try {
@@ -92,7 +93,7 @@ internal class PythonCodeScanSessionConfig(
         return imports.toList()
     }
 
-    private fun getAbsoluteFilePaths(importPaths: List<String>): List<String> {
+    fun getAbsoluteFilePaths(importPaths: List<String>): List<String> {
         val filePaths = mutableListOf<String>()
         projectContentRoots.forEach { root ->
             importPaths.forEach { importPath ->
@@ -114,11 +115,10 @@ internal class PythonCodeScanSessionConfig(
         return importedFiles
     }
 
-    private fun includeDependencies(): PayloadMetadata {
+    private fun includeDependencies(files: List<VirtualFile>): PayloadMetadata {
         val includedSourceFiles = mutableSetOf<String>()
         var currentTotalFileSize = 0L
         var currentTotalLines = 0L
-        val files = getSourceFilesUnderProjectRoot()
         val queue = ArrayDeque<String>()
 
         files.forEach { pivotFile ->
@@ -153,7 +153,7 @@ internal class PythonCodeScanSessionConfig(
         return PayloadMetadata(includedSourceFiles, currentTotalFileSize, currentTotalLines)
     }
 
-    private fun getSourceFilesUnderProjectRoot(): List<VirtualFile> {
+    override fun getSourceFilesUnderProjectRoot(selectedFile: VirtualFile): List<VirtualFile> {
         // Include the current selected file
         val files = mutableListOf(selectedFile)
         // Include other files only if the current file is in the project.

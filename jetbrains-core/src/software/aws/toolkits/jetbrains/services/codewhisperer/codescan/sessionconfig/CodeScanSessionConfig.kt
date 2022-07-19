@@ -27,6 +27,11 @@ internal sealed class CodeScanSessionConfig {
     abstract fun overallJobTimeoutInSeconds(): Long
 
     /**
+     * Returns all the source files for a given payload type.
+     */
+    abstract fun getSourceFilesUnderProjectRoot(selectedFile: VirtualFile): List<VirtualFile>
+
+    /**
      * Timeout for creating the payload [createPayload]
      */
     open fun createPayloadTimeoutInSeconds(): Long = CODE_SCAN_CREATE_PAYLOAD_TIMEOUT_IN_SECONDS
