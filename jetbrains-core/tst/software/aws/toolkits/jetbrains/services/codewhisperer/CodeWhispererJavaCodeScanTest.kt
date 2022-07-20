@@ -3,6 +3,7 @@
 
 package software.aws.toolkits.jetbrains.services.codewhisperer
 
+import com.intellij.analysis.problemsView.toolWindow.ProblemsView
 import com.intellij.compiler.CompilerTestUtil
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.command.WriteCommandAction
@@ -10,8 +11,6 @@ import com.intellij.openapi.compiler.CompileContext
 import com.intellij.openapi.compiler.CompilerManager
 import com.intellij.openapi.compiler.CompilerMessageCategory
 import com.intellij.openapi.module.ModuleManager
-import com.intellij.openapi.project.Project
-import com.intellij.openapi.project.guessProjectDir
 import com.intellij.openapi.projectRoots.JavaSdk
 import com.intellij.openapi.projectRoots.ProjectJdkTable
 import com.intellij.openapi.projectRoots.impl.SdkConfigurationUtil
@@ -19,30 +18,33 @@ import com.intellij.openapi.roots.CompilerProjectExtension
 import com.intellij.openapi.roots.ModuleRootModificationUtil
 import com.intellij.openapi.util.Disposer
 import com.intellij.openapi.vfs.LocalFileSystem
-import com.intellij.openapi.vfs.VfsUtil
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.openapi.vfs.newvfs.impl.VfsRootAccess
-import com.intellij.testFramework.ApplicationRule
-import com.intellij.testFramework.DisposableRule
+import com.intellij.openapi.wm.RegisterToolWindowTask
+import com.intellij.openapi.wm.ToolWindowManager
 import com.intellij.testFramework.IdeaTestUtil
 import com.intellij.testFramework.PlatformTestUtil
 import com.intellij.testFramework.runInEdtAndWait
 import kotlinx.coroutines.runBlocking
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.Before
-import org.junit.Rule
+import org.junit.Ignore
 import org.junit.Test
 import org.junit.jupiter.api.assertThrows
 import org.mockito.kotlin.any
 import org.mockito.kotlin.doNothing
 import org.mockito.kotlin.spy
 import org.mockito.kotlin.stub
+import software.aws.toolkits.jetbrains.services.codewhisperer.codescan.CodeScanSessionContext
 import software.aws.toolkits.jetbrains.services.codewhisperer.codescan.CodeWhispererCodeScanException
 import software.aws.toolkits.jetbrains.services.codewhisperer.codescan.CodeWhispererCodeScanManager
+import software.aws.toolkits.jetbrains.services.codewhisperer.codescan.CodeWhispererCodeScanSession
+import software.aws.toolkits.jetbrains.services.codewhisperer.codescan.CodeWhispererCodeScanTreeModel
 import software.aws.toolkits.jetbrains.services.codewhisperer.codescan.sessionconfig.CodeScanSessionConfig
 import software.aws.toolkits.jetbrains.services.codewhisperer.codescan.sessionconfig.JavaCodeScanSessionConfig
-import software.aws.toolkits.jetbrains.utils.rules.HeavyJavaCodeInsightTestFixtureRule
-import software.aws.toolkits.jetbrains.utils.rules.PythonCodeInsightTestFixtureRule
+import software.aws.toolkits.jetbrains.services.codewhisperer.codescan.sessionconfig.Payload
+import software.aws.toolkits.jetbrains.services.codewhisperer.codescan.sessionconfig.PayloadContext
+import software.aws.toolkits.jetbrains.services.codewhisperer.codescan.sessionconfig.PythonCodeScanSessionConfig
 import software.aws.toolkits.jetbrains.utils.rules.addClass
 import software.aws.toolkits.jetbrains.utils.rules.addModule
 import software.aws.toolkits.telemetry.CodewhispererLanguage
@@ -53,42 +55,30 @@ import java.util.zip.ZipInputStream
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 
-class CodeWhispererCodeScanJavaCtxTest {
-
-    @Rule
-    @JvmField
-    val applicationRule = ApplicationRule()
-
-    @Rule
-    @JvmField
-    val javaProjectRule = HeavyJavaCodeInsightTestFixtureRule()
-
-    @Rule
-    @JvmField
-    val disposableRule = DisposableRule()
-
-    internal lateinit var scanManagerSpy: CodeWhispererCodeScanManager
-    internal lateinit var project: Project
+class CodeWhispererJavaCodeScanTest : CodeWhispererCodeScanTestBase() {
 
     internal lateinit var utilsJava: VirtualFile
     internal lateinit var test1Java: VirtualFile
     internal lateinit var test2Java: VirtualFile
-    internal var sessionConfig: JavaCodeScanSessionConfig? = null
+    internal var sessionConfigSpy: JavaCodeScanSessionConfig? = null
 
     private var totalSize: Long = 0
 
     @Before
-    fun setup() {
+    override fun setup() {
         project = javaProjectRule.project
-        scanManagerSpy = spy(CodeWhispererCodeScanManager.getInstance(project))
-        doNothing().`when`(scanManagerSpy).addCodeScanUI(any())
         setupJavaProject()
-        sessionConfig = spy(CodeScanSessionConfig.create(utilsJava, project) as? JavaCodeScanSessionConfig)
+        sessionConfigSpy = spy(CodeScanSessionConfig.create(utilsJava, project) as? JavaCodeScanSessionConfig)
+        super.setup()
+    }
+
+    override fun setupCodeScanFindings(): String {
+        return defaultCodeScanFindings(utilsJava)
     }
 
     @Test
     fun `test createPayload`() {
-        val payload = sessionConfig?.createPayload()
+        val payload = sessionConfigSpy?.createPayload()
         assertNotNull(payload)
         assertEquals(3, payload.context.totalFiles)
         assertEquals(totalSize, payload.context.payloadSize)
@@ -115,34 +105,34 @@ class CodeWhispererCodeScanJavaCtxTest {
 
     @Test
     fun `test getSourceFilesUnderProjectRoot`() {
-        assertThat(sessionConfig?.getSourceFilesUnderProjectRoot(utilsJava)?.size).isEqualTo(3)
+        assertThat(sessionConfigSpy?.getSourceFilesUnderProjectRoot(utilsJava)?.size).isEqualTo(3)
     }
 
     @Test
     fun `test parseImports()`() {
-        val utilsJavaImports = sessionConfig?.parseImports(utilsJava)
+        val utilsJavaImports = sessionConfigSpy?.parseImports(utilsJava)
         assertThat(utilsJavaImports?.imports?.size).isEqualTo(4)
 
-        val test1JavaImports = sessionConfig?.parseImports(test1Java)
+        val test1JavaImports = sessionConfigSpy?.parseImports(test1Java)
         assertThat(test1JavaImports?.imports?.size).isEqualTo(1)
     }
 
     @Test
     fun `selected file larger than payload limit throws exception`() {
-        sessionConfig?.stub {
+        sessionConfigSpy?.stub {
             onGeneric { getPayloadLimitInBytes() }.thenReturn(100)
         }
         assertThrows<CodeWhispererCodeScanException> {
-            val payload = sessionConfig?.createPayload()
+            val payload = sessionConfigSpy?.createPayload()
         }
     }
 
     @Test
     fun `test createPayload with custom payload limit`() {
-        sessionConfig?.stub {
+        sessionConfigSpy?.stub {
             onGeneric { getPayloadLimitInBytes() }.thenReturn(900)
         }
-        val payload = sessionConfig?.createPayload()
+        val payload = sessionConfigSpy?.createPayload()
         assertNotNull(payload)
         assertEquals(1, payload.context.totalFiles)
         assertEquals(346, payload.context.payloadSize)
@@ -167,19 +157,23 @@ class CodeWhispererCodeScanJavaCtxTest {
         assertEquals(1, filesInZip)
     }
 
-
     @Test
-    fun testSetup() {
+    fun `e2e happy path integration test`() {
+        val payload = sessionConfigSpy?.createPayload()
+        assertNotNull(payload)
+        val codeScanContext = CodeScanSessionContext(project, sessionConfigSpy!!)
+        val sessionMock = spy(CodeWhispererCodeScanSession(codeScanContext))
+
+        doNothing().`when`(sessionMock).uploadArtifactTOS3(any(), any(), any())
+        doNothing().`when`(sessionMock).sleepThread()
+
         runBlocking {
-            runInEdtAndWait {
-                javaProjectRule.fixture.openFileInEditor(utilsJava)
-            }
             println("Running code scan...")
             assert(!Disposer.isDisposed(javaProjectRule.project))
-            scanManagerSpy.runCodeScan()
+            val codeScanResponse = sessionMock.run()
+            assertThat(codeScanResponse.issues).hasSize(2)
         }
     }
-
 
     private fun compileProject() {
         setUpCompiler()

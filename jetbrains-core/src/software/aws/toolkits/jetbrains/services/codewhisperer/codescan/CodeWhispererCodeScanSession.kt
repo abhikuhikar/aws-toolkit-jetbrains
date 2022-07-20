@@ -128,7 +128,7 @@ internal class CodeWhispererCodeScanSession(val sessionContext: CodeScanSessionC
                 "Get security scan status: ${getCodeScanResponse.status()}, " +
                     "request id: ${getCodeScanResponse.responseMetadata().requestId()}"
             }
-            sleep(CODE_SCAN_POLLING_INTERVAL_IN_SECONDS * TOTAL_MILLIS_IN_SECOND)
+            sleepThread()
             if (codeScanStatus == CodeScanStatus.FAILED) {
                 LOG.debug {
                     "CodeWhisperer service error occurred. Something went wrong fetching results for security scan: $getCodeScanResponse " +
@@ -271,6 +271,11 @@ internal class CodeWhispererCodeScanSession(val sessionContext: CodeScanSessionC
             }
         }
     }
+
+    fun sleepThread() {
+        sleep(CODE_SCAN_POLLING_INTERVAL_IN_SECONDS * TOTAL_MILLIS_IN_SECOND)
+    }
+
     companion object {
         private val LOG = getLogger<CodeWhispererCodeScanSession>()
         private val MAPPER = jacksonObjectMapper()

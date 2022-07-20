@@ -4,48 +4,24 @@
 package software.aws.toolkits.jetbrains.services.codewhisperer
 
 
-import com.intellij.openapi.project.Project
 import com.intellij.openapi.vfs.VirtualFile
-import com.intellij.testFramework.ApplicationRule
-import com.intellij.testFramework.DisposableRule
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.Before
-import org.junit.Rule
 import org.junit.Test
 import org.junit.jupiter.api.assertThrows
-import org.mockito.kotlin.any
-import org.mockito.kotlin.doNothing
 import org.mockito.kotlin.spy
 import org.mockito.kotlin.stub
-import software.amazon.awssdk.services.codewhisperer.CodeWhispererClient
 import software.aws.toolkits.jetbrains.services.codewhisperer.codescan.CodeWhispererCodeScanException
-import software.aws.toolkits.jetbrains.services.codewhisperer.codescan.CodeWhispererCodeScanManager
 import software.aws.toolkits.jetbrains.services.codewhisperer.codescan.sessionconfig.CodeScanSessionConfig
 import software.aws.toolkits.jetbrains.services.codewhisperer.codescan.sessionconfig.PythonCodeScanSessionConfig
-import software.aws.toolkits.jetbrains.utils.rules.HeavyJavaCodeInsightTestFixtureRule
-import software.aws.toolkits.jetbrains.utils.rules.PythonCodeInsightTestFixtureRule
 import software.aws.toolkits.telemetry.CodewhispererLanguage
 import java.io.BufferedInputStream
 import java.util.zip.ZipInputStream
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 
-class CodeWhispererCodeScanContextTruncationTest {
+class CodeWhispererPythonCodeScanTest : CodeWhispererCodeScanTestBase() {
 
-    @Rule
-    @JvmField
-    val applicationRule = ApplicationRule()
-
-    @Rule
-    @JvmField
-    val pythonProjectRule = PythonCodeInsightTestFixtureRule()
-
-    @Rule
-    @JvmField
-    val disposableRule = DisposableRule()
-
-    internal lateinit var scanManagerSpy: CodeWhispererCodeScanManager
-    internal lateinit var project: Project
     internal lateinit var testPy: VirtualFile
     internal lateinit var utilsPy: VirtualFile
     internal lateinit var helperPy: VirtualFile
@@ -54,12 +30,11 @@ class CodeWhispererCodeScanContextTruncationTest {
     private var totalSize: Long = 0
 
     @Before
-    fun setup() {
-        project = pythonProjectRule.project
-        scanManagerSpy = spy(CodeWhispererCodeScanManager.getInstance(project))
-        doNothing().`when`(scanManagerSpy).addCodeScanUI(any())
+    override fun setup() {
         setupPythonProject()
+        project = pythonProjectRule.project
         sessionConfig = spy(CodeScanSessionConfig.create(testPy, project) as? PythonCodeScanSessionConfig)
+        super.setup()
     }
 
     @Test

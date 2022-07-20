@@ -5,22 +5,15 @@ package software.aws.toolkits.jetbrains.services.codewhisperer
 
 
 import com.github.tomakehurst.wiremock.client.WireMock
-import com.github.tomakehurst.wiremock.core.WireMockConfiguration
-import com.github.tomakehurst.wiremock.junit.WireMockRule
 import com.intellij.openapi.application.ApplicationManager
-import com.intellij.openapi.project.Project
 import com.intellij.psi.PsiFile
-import com.intellij.testFramework.ApplicationRule
-import com.intellij.testFramework.DisposableRule
 import com.intellij.testFramework.replaceService
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import org.apache.commons.codec.digest.DigestUtils
 import org.assertj.core.api.Assertions
 import org.assertj.core.api.Assertions.assertThat
-import org.gradle.internal.impldep.com.amazonaws.ResponseMetadata
 import org.junit.Before
-import org.junit.Rule
 import org.junit.Test
 import org.mockito.internal.verification.Times
 import org.mockito.kotlin.any
@@ -33,20 +26,11 @@ import org.mockito.kotlin.spy
 import org.mockito.kotlin.stub
 import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
-import software.amazon.awssdk.awscore.DefaultAwsResponseMetadata
-import software.amazon.awssdk.services.codewhisperer.CodeWhispererClient
-import software.amazon.awssdk.services.codewhisperer.model.CodeScanStatus
-import software.amazon.awssdk.services.codewhisperer.model.CreateCodeScanResponse
 import software.amazon.awssdk.services.codewhisperer.model.CreateUploadUrlRequest
-import software.amazon.awssdk.services.codewhisperer.model.CreateUploadUrlResponse
-import software.amazon.awssdk.services.codewhisperer.model.GetCodeScanResponse
-import software.amazon.awssdk.services.codewhisperer.model.ListCodeScanFindingsResponse
 import software.aws.toolkits.core.utils.WaiterTimeoutException
-import software.aws.toolkits.jetbrains.core.MockClientManagerRule
 import software.aws.toolkits.jetbrains.services.codewhisperer.codescan.CodeScanSessionContext
 import software.aws.toolkits.jetbrains.services.codewhisperer.codescan.CodeWhispererCodeScanException
 import software.aws.toolkits.jetbrains.services.codewhisperer.codescan.CodeWhispererCodeScanIssue
-import software.aws.toolkits.jetbrains.services.codewhisperer.codescan.CodeWhispererCodeScanManager
 import software.aws.toolkits.jetbrains.services.codewhisperer.codescan.CodeWhispererCodeScanSession
 import software.aws.toolkits.jetbrains.services.codewhisperer.codescan.Description
 import software.aws.toolkits.jetbrains.services.codewhisperer.codescan.sessionconfig.CodeScanSessionConfig
@@ -56,59 +40,18 @@ import software.aws.toolkits.jetbrains.services.codewhisperer.codescan.sessionco
 import software.aws.toolkits.jetbrains.services.codewhisperer.credentials.CodeWhispererClientManager
 import software.aws.toolkits.jetbrains.services.codewhisperer.util.CodeWhispererConstants.PYTHON_CODE_SCAN_TIMEOUT_IN_SECONDS
 import software.aws.toolkits.jetbrains.services.codewhisperer.util.CodeWhispererConstants.TOTAL_MILLIS_IN_SECOND
-import software.aws.toolkits.jetbrains.utils.rules.PythonCodeInsightTestFixtureRule
 import software.aws.toolkits.telemetry.CodewhispererLanguage
 import java.io.File
 import java.io.FileInputStream
 import java.util.Base64
 import kotlin.test.assertNotNull
 
-class CodeWhispererCodeScanTest {
-    @Rule
-    @JvmField
-    val applicationRule = ApplicationRule()
-
-    @Rule
-    @JvmField
-    val pythonProjectRule = PythonCodeInsightTestFixtureRule()
-
-    @Rule
-    @JvmField
-    val mockClientManagerRule = MockClientManagerRule()
-
-    @Rule
-    @JvmField
-    val disposableRule = DisposableRule()
-
-    @Rule
-    @JvmField
-    val wireMock = WireMockRule(WireMockConfiguration.wireMockConfig().dynamicPort())
-
-    internal lateinit var scanManagerSpy: CodeWhispererCodeScanManager
-    internal lateinit var project: Project
+class CodeWhispererCodeScanTest : CodeWhispererCodeScanTestBase() {
     internal lateinit var psifile: PsiFile
-    internal lateinit var mockClient: CodeWhispererClient
-    private lateinit var s3endpoint: String
-
-    private lateinit var fakeGetUploadUrlResponse: CreateUploadUrlResponse
-
-    private lateinit var fakeCreateCodeScanResponse: CreateCodeScanResponse
-    private lateinit var fakeCreateCodeScanResponseFailed: CreateCodeScanResponse
-    private lateinit var fakeCreateCodeScanResponsePending: CreateCodeScanResponse
-
-    private lateinit var fakeListCodeScanFindingsResponse: ListCodeScanFindingsResponse
-
-    private lateinit var fakeGetCodeScanResponse: GetCodeScanResponse
-    private lateinit var fakeGetCodeScanResponsePending: GetCodeScanResponse
-    private lateinit var fakeGetCodeScanResponseFailed: GetCodeScanResponse
-    private lateinit var fakeSecurutiesIssues: List<CodeWhispererCodeScanIssue>
-    private val metadata: DefaultAwsResponseMetadata = DefaultAwsResponseMetadata.create(
-        mapOf(ResponseMetadata.AWS_REQUEST_ID to CodeWhispererTestUtil.testRequestId)
-    )
+    private lateinit var fakeSecurityIssues: List<CodeWhispererCodeScanIssue>
 
     @Before
-    fun setup() {
-        mockClient = mockClientManagerRule.create()
+    override fun setup() {
         project = pythonProjectRule.project
         psifile = pythonProjectRule.fixture.addFileToProject(
             "/test1.py",
@@ -118,13 +61,7 @@ class CodeWhispererCodeScanTest {
                def add(
             """.trimMargin()
         )
-        s3endpoint = "http://127.0.0.1:${wireMock.port()}"
-
-        scanManagerSpy = spy(CodeWhispererCodeScanManager.getInstance(project))
-        doNothing().`when`(scanManagerSpy).addCodeScanUI(any())
-        setupClient()
-        setupResponse()
-        fakeSecurutiesIssues = listOf(
+        fakeSecurityIssues = listOf(
             CodeWhispererCodeScanIssue(
                 project,
                 psifile.virtualFile,
@@ -136,54 +73,7 @@ class CodeWhispererCodeScanTest {
                 Description("", "")
             )
         )
-
-        whenever(mockClient.createUploadUrl(any<CreateUploadUrlRequest>())).thenReturn(fakeGetUploadUrlResponse)
-    }
-
-    private fun setupResponse() {
-        fakeGetUploadUrlResponse = CreateUploadUrlResponse.builder()
-            .uploadId("uploadId")
-            .uploadUrl(s3endpoint)
-            .responseMetadata(metadata)
-            .build() as CreateUploadUrlResponse
-
-        fakeCreateCodeScanResponse = CreateCodeScanResponse.builder()
-            .status(CodeScanStatus.COMPLETED)
-            .jobId("jobId")
-            .responseMetadata(metadata)
-            .build() as CreateCodeScanResponse
-
-        fakeCreateCodeScanResponseFailed = CreateCodeScanResponse.builder()
-            .status(CodeScanStatus.FAILED)
-            .jobId("jobId")
-            .responseMetadata(metadata)
-            .build() as CreateCodeScanResponse
-
-        fakeCreateCodeScanResponsePending = CreateCodeScanResponse.builder()
-            .status(CodeScanStatus.PENDING)
-            .jobId("jobId")
-            .responseMetadata(metadata)
-            .build() as CreateCodeScanResponse
-
-        fakeListCodeScanFindingsResponse = ListCodeScanFindingsResponse.builder()
-            .codeScanFindings("")
-            .responseMetadata(metadata)
-            .build() as ListCodeScanFindingsResponse
-
-        fakeGetCodeScanResponse = GetCodeScanResponse.builder()
-            .status(CodeScanStatus.COMPLETED)
-            .responseMetadata(metadata)
-            .build() as GetCodeScanResponse
-
-        fakeGetCodeScanResponsePending = GetCodeScanResponse.builder()
-            .status(CodeScanStatus.PENDING)
-            .responseMetadata(metadata)
-            .build() as GetCodeScanResponse
-
-        fakeGetCodeScanResponseFailed = GetCodeScanResponse.builder()
-            .status(CodeScanStatus.FAILED)
-            .responseMetadata(metadata)
-            .build() as GetCodeScanResponse
+        super.setup()
     }
 
     @Test
@@ -195,10 +85,10 @@ class CodeWhispererCodeScanTest {
 
         argumentCaptor<CreateUploadUrlRequest>().apply {
             verify(mockClient, Times(1)).createUploadUrl(capture())
-            Assertions.assertThat(response.uploadUrl()).isEqualTo(s3endpoint)
-            Assertions.assertThat(response.uploadId()).isEqualTo("uploadId")
-            Assertions.assertThat(firstValue.contentMd5()).isEqualTo("md5")
-            Assertions.assertThat(firstValue.artifactTypeAsString()).isEqualTo("type")
+            assertThat(response.uploadUrl()).isEqualTo(s3endpoint)
+            assertThat(response.uploadId()).isEqualTo(UPLOAD_ID)
+            assertThat(firstValue.contentMd5()).isEqualTo("md5")
+            assertThat(firstValue.artifactTypeAsString()).isEqualTo("type")
         }
     }
 
@@ -245,6 +135,57 @@ class CodeWhispererCodeScanTest {
     }
 
     @Test
+    fun `test mapToCodeScanIssues`() {
+        val recommendations = listOf(
+            """
+                [
+                    {
+                        "filePath": "${file().path}",
+                        "startLine": 1,
+                        "endLine": 2,
+                        "title": "test",
+                        "description": {
+                            "text": "global variable",
+                            "markdown": "### global variable"
+                        }                    
+                    },
+                    {
+                        "filePath": "${file().path}",
+                        "startLine": 1,
+                        "endLine": 2,
+                        "title": "test",
+                        "description": {
+                            "text": "global variable",
+                            "markdown": "### global variable"
+                        }                    
+                    }
+                ]
+            """,
+            """
+                [
+                    {
+                        "filePath": "non-exist.py",
+                        "startLine": 1,
+                        "endLine": 2,
+                        "title": "test",
+                        "description": {
+                            "text": "global variable",
+                            "markdown": "### global variable"
+                        }                    
+                    }
+                ]                
+            """
+        )
+
+        val sessionContextMock = mock<CodeScanSessionContext>()
+        whenever(sessionContextMock.project).thenReturn(project)
+        val session = CodeWhispererCodeScanSession(sessionContextMock)
+
+        val res = session.mapToCodeScanIssues(recommendations)
+        assertThat(res).hasSize(2)
+    }
+
+    @Test
     fun `test run() - happypath`() {
         val sessionConfigSpy = spy(CodeScanSessionConfig.create(psifile.virtualFile, project) as? PythonCodeScanSessionConfig)
         assertNotNull(sessionConfigSpy)
@@ -260,12 +201,12 @@ class CodeWhispererCodeScanTest {
             onGeneric { createCodeScan(any()) }.thenReturn(fakeCreateCodeScanResponse)
             onGeneric { listCodeScanFindings(any()) }.thenReturn(fakeListCodeScanFindingsResponse)
             onGeneric { getCodeScan(any()) }.thenReturn(fakeGetCodeScanResponse)
-            onGeneric { mapToCodeScanIssues(any()) }.thenReturn(fakeSecurutiesIssues)
+            onGeneric { mapToCodeScanIssues(any()) }.thenReturn(fakeSecurityIssues)
         }
 
         runBlocking {
             val response = sessionMock.run()
-            assertThat(response.issues).hasSize(fakeSecurutiesIssues.size)
+            assertThat(response.issues).hasSize(fakeSecurityIssues.size)
         }
 
         val inOrder = inOrder(sessionMock)
@@ -352,56 +293,45 @@ class CodeWhispererCodeScanTest {
         }
     }
 
+/*
     @Test
-    fun `test mapToCodeScanIssues`() {
-        val recommendations = listOf(
-            """
-                [
-                    {
-                        "filePath": "${file().path}",
-                        "startLine": 1,
-                        "endLine": 2,
-                        "title": "test",
-                        "description": {
-                            "text": "global variable",
-                            "markdown": "### global variable"
-                        }                    
-                    },
-                    {
-                        "filePath": "${file().path}",
-                        "startLine": 1,
-                        "endLine": 2,
-                        "title": "test",
-                        "description": {
-                            "text": "global variable",
-                            "markdown": "### global variable"
-                        }                    
-                    }
-                ]
-            """,
-            """
-                [
-                    {
-                        "filePath": "non-exist.py",
-                        "startLine": 1,
-                        "endLine": 2,
-                        "title": "test",
-                        "description": {
-                            "text": "global variable",
-                            "markdown": "### global variable"
-                        }                    
-                    }
-                ]                
-            """
+    fun testSetup() {
+        val sessionConfigSpy = spy(CodeScanSessionConfig.create(psifile.virtualFile, project) as? PythonCodeScanSessionConfig)
+        assertNotNull(sessionConfigSpy)
+        val payloadContext = PayloadContext(CodewhispererLanguage.Python, 1L, 1L, 1, 600)
+        val codeScanContext = CodeScanSessionContext(project, sessionConfigSpy)
+        val sessionMock = spy(CodeWhispererCodeScanSession(codeScanContext))
+
+        sessionConfigSpy.stub {
+            onGeneric { sessionConfigSpy.createPayload() }.thenReturn(Payload(payloadContext, file()))
+        }
+        sessionMock.stub {
+            onGeneric { createUploadUrlAndUpload(any(), any()) }.thenReturn(fakeGetUploadUrlResponse)
+            onGeneric { createCodeScan(any()) }.thenReturn(fakeCreateCodeScanResponse)
+            onGeneric { listCodeScanFindings(any()) }.thenReturn(fakeListCodeScanFindingsResponse)
+            onGeneric { getCodeScan(any()) }.thenReturn(fakeGetCodeScanResponse)
+            onGeneric { mapToCodeScanIssues(any()) }.thenReturn(fakeSecurutiesIssues)
+        }
+        doNothing().`when`(sessionMock).sleepThread()
+
+        ToolWindowManager.getInstance(pythonProjectRule.project).registerToolWindow(
+            RegisterToolWindowTask(
+                id = ProblemsView.ID
+            )
         )
 
-        val sessionContextMock = mock<CodeScanSessionContext>()
-        whenever(sessionContextMock.project).thenReturn(project)
-        val session = CodeWhispererCodeScanSession(sessionContextMock)
-
-        val res = session.mapToCodeScanIssues(recommendations)
-        assertThat(res).hasSize(2)
+        runBlocking {
+            println("Running code scan...")
+            assert(!Disposer.isDisposed(pythonProjectRule.project))
+            val job = scanManagerSpy.launchCodeScanCoroutine(sessionMock)
+            job.join()
+            assertNotNull(scanManagerSpy.getScanTree().model)
+            val treeModel = scanManagerSpy.getScanTree().model as? CodeWhispererCodeScanTreeModel
+            assertNotNull(treeModel)
+            assertEquals(1, treeModel.getTotalIssuesCount())
+        }
     }
+*/
 
     private fun file() = File(psifile.virtualFile.path)
 
